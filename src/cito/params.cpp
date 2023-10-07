@@ -5,8 +5,9 @@
 #include "cito/params.h"
 
 // ***** CONSTRUCTOR ***********************************************************
-Params::Params(const mjModel *model_, int testNumber) : model(model_)
+Params::Params(const mjModel *model_, int _testNumber) : model(model_)
 {
+    testNumber = _testNumber;
     // read config files
     YAML::Node params = YAML::LoadFile(paths::workspaceDir + "/src/cito/config/params.yaml");
     // task parameters

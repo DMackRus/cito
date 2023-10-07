@@ -75,6 +75,8 @@ public:
     /** This function converts free joints' quaternions to Euler angles so that
      *  the dimensionality of the state vector is 2*nv instead of nq+nv */
     eigVd getState(const mjData *d);
+
+    int testNumber;
 };
 
 #endif //PARAMS_H

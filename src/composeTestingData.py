@@ -4,49 +4,6 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-def main():
-    num_trajecs = 100
-    methods = ["baseline", "SI2"]
-    labels = ["optTime", "costReduction", "derivsTime", "qpTime"]
-
-    data = np.zeros((num_trajecs, len(labels) * len(methods)))
-
-
-
-    for i in range(len(methods)):
-        for j in range(num_trajecs):
-
-            # root = "home/davidrussell/cito_ws/src/cito/src"
-            file_name = "../testingData/data/" + methods[i] + "/" + str(j) + ".csv"
-            tempData = np.genfromtxt(file_name, delimiter=",")
-
-            data[j, i * len(labels) : (i + 1) * len(labels)] = tempData
-
-    print(data)
-
-
-    optTimes = np.zeros((num_trajecs, len(methods)))
-    costReductions = np.zeros((num_trajecs, len(methods)))
-
-    for i in range(len(methods)):
-        optTimes[:, i] = data[:, i * len(labels)]
-        costReductions[:, i] = data[:, i * len(labels) + 1]
-
-    fig, axes = plt.subplots(2, 1, figsize = (18,8))
-    boxPlotTitle = "Average percentage calculated derivatives against interpolation methods " + "panda_pushing_clutter"
-    yAxisLabel = "Average percentage calculate derivatives"
-    orange = "#edb83b"
-    bp3 = box_plot(avgPercentageDerivs, orange, yAxisLabel, axes[0], labels, False)
-
-    boxPlotTitle = "average time getting derivatives against interpolation methods " + "panda_pushing_clutter"
-    yAxisLabel = "Average time getting derivatives (ms)"
-    orange = "#edb83b"
-    bp4 = box_plot(avgTimeGettingDerivs, orange, yAxisLabel, axes[1], labels)
-    fig.suptitle(taskName + " - derivative information", fontsize=16)
-
-    # Save data to new csv file
-    np.savetxt("../testingData/data.csv", data, delimiter=",")
-
 def box_plot(data, fill_color, yAxisTitle, ax, labels, logyAxis = False, baseline_yLine = False):
     normalPosterColour = "#103755"
     highlightPosterColor = "#EEF30D"
@@ -96,6 +53,69 @@ def box_plot(data, fill_color, yAxisTitle, ax, labels, logyAxis = False, baselin
     ax.set_xticklabels(labels, fontsize=11)
         
     return bp 
+
+def main():
+    num_trajecs = 100
+    methods = ["baseline", "SI2"]
+    labels = ["optTime", "costReduction", "derivsTime", "qpTime"]
+
+    data = np.zeros((num_trajecs, len(labels) * len(methods)))
+
+
+
+    for i in range(len(methods)):
+        for j in range(num_trajecs):
+
+            # root = "home/davidrussell/cito_ws/src/cito/src"
+            file_name = "../testingData/data/" + methods[i] + "/" + str(j) + ".csv"
+            tempData = np.genfromtxt(file_name, delimiter=",")
+
+            data[j, i * len(labels) : (i + 1) * len(labels)] = tempData
+
+    print(data)
+
+
+    optTimes = np.zeros((num_trajecs, len(methods)))
+    costReductions = np.zeros((num_trajecs, len(methods)))
+    derivsTime = np.zeros((num_trajecs, len(methods)))
+    qpTime = np.zeros((num_trajecs, len(methods)))
+
+    for i in range(len(methods)):
+        optTimes[:, i] = data[:, i * len(labels)]
+        costReductions[:, i] = data[:, i * len(labels) + 1]
+        derivsTime[:, i] = data[:, i * len(labels) + 2]
+        qpTime[:, i] = data[:, i * len(labels) + 3]
+
+    orange = "#edb83b"
+
+    fig, axes = plt.subplots(4, 1, figsize = (18,8))
+    boxPlotTitle = "opt times"
+    yAxisLabel = "opt time (s)"
+    orange = "#edb83b"
+    bp3 = box_plot(optTimes, orange, yAxisLabel, axes[0], methods, False)
+
+    boxPlotTitle = "cost reduction"
+    yAxisLabel = "cost reduction"
+    orange = "#edb83b"
+    bp4 = box_plot(costReductions, orange, yAxisLabel, axes[1], methods)
+
+    boxPlotTitle = "time derivs"
+    yAxisLabel = "derivs time (s)"
+    orange = "#edb83b"
+    bp4 = box_plot(derivsTime, orange, yAxisLabel, axes[2], methods)
+
+    boxPlotTitle = "time qp"
+    yAxisLabel = "qp time (s)"
+    orange = "#edb83b"
+    bp4 = box_plot(qpTime, orange, yAxisLabel, axes[3], methods)
+
+
+
+    fig.suptitle("sawyer" + " - derivative information", fontsize=16)
+    plt.show()
+
+    # Save data to new csv file
+    np.savetxt("../testingData/data.csv", data, delimiter=",")
     
 
 

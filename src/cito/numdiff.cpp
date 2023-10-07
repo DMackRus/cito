@@ -43,7 +43,7 @@ void NumDiff::copyTakeStep(const mjData *dMain, const eigVd &u, double *xNew, do
 }
 
 // hardWorker: for full, slow finite-difference computation
-void NumDiff::hardWorker(const mjData *dMain, const eigVd &uMain, double *deriv, double compensateBias)
+void NumDiff::hardWorker(const mjData *dMain, const eigVd &uMain, double *deriv, double compensateBias, std::vector<int> cols)
 {
     // create data
     mjData *d;
@@ -61,8 +61,20 @@ void NumDiff::hardWorker(const mjData *dMain, const eigVd &uMain, double *deriv,
 //    std::cout << "model nv: " << m->nv << std::endl;
 //    std::cout << "model nq: " << m->nq << std::endl;
 //    std::cout << "model nu: " << m->nu << std::endl;
+
     for (int i = 0; i < m->nv; i++)
     {
+        bool computeCol = false;
+        for(int j = 0; j < cols.size(); j++){
+            if(i == cols[j]){
+                computeCol = true;
+            }
+        }
+
+        if(!computeCol){
+            continue;
+        }
+
         // get joint id for this dof
         int jID = m->dof_jntid[i];
         // apply quaternion or simple perturbation
@@ -106,6 +118,17 @@ void NumDiff::hardWorker(const mjData *dMain, const eigVd &uMain, double *deriv,
     // finite-difference over velocities
     for (int i = 0; i < m->nv; i++)
     {
+        bool computeCol = false;
+        for(int j = 0; j < cols.size(); j++){
+            if(i == cols[j]){
+                computeCol = true;
+            }
+        }
+
+        if(!computeCol){
+            continue;
+        }
+
         // perturb velocity
         d->qvel[i] += eps;
         // get the positive perturbed state
@@ -129,6 +152,17 @@ void NumDiff::hardWorker(const mjData *dMain, const eigVd &uMain, double *deriv,
     uTemp = uMain;
     for (int i = 0; i < cp->m; i++)
     {
+        bool computeCol = false;
+        for(int j = 0; j < cols.size(); j++){
+            if(i == cols[j]){
+                computeCol = true;
+            }
+        }
+
+        if(!computeCol){
+            continue;
+        }
+
         // perturbation in the positive direction
         uTemp(i) += eps;
         // get the positive perturbed state
@@ -150,24 +184,34 @@ void NumDiff::hardWorker(const mjData *dMain, const eigVd &uMain, double *deriv,
 }
 
 // linDyn: calculates derivatives of the state and control trajectories
-void NumDiff::linDyn(const mjData *dMain, const eigVd &uMain, double *Fxd, double *Fud, double compensateBias)
+void NumDiff::linDyn(const mjData *dMain, const eigVd &uMain, double *Fxd, double *Fud, double compensateBias, std::vector<int> cols)
 {
     // TODO: consider doing the memory allocation/freeing in the constructor/destructor
     double *deriv = (double *)mju_malloc(sizeof(double) * cp->n * (cp->n + cp->m));
-    this->hardWorker(dMain, uMain, deriv, compensateBias);
+    this->hardWorker(dMain, uMain, deriv, compensateBias, cols);
     mju_copy(Fxd, deriv, cp->n * cp->n);
     mju_copy(Fud, deriv + cp->n * cp->n, cp->n * cp->m);
     mju_free(deriv);
 }
 
-std::vector<int> NumDiff::generateKeypoints(derivative_interpolator di, const eigMd X, int horizon){
-    std::vector<int> keypoints;
-    keypoints.push_back(0);
+std::vector<std::vector<int>> NumDiff::generateKeypoints(derivative_interpolator di, const eigMd X, int horizon){
+    std::vector<std::vector<int>> keypoints;
+    std::vector<int> fullRow;
+    std::vector<int> emptyRow;
+
+    for(int i = 0; i < horizon; i++){
+        fullRow.push_back(i);
+    }
+    keypoints.push_back(fullRow);
 
     if(di.keyPoint_method == "set_interval"){
+
         for(int i = 1; i < horizon; i++){
             if(i % di.min_n == 0){
-                keypoints.push_back(i);
+                keypoints.push_back(fullRow);
+            }
+            else{
+                keypoints.push_back(emptyRow);
             }
         }
 
@@ -185,69 +229,107 @@ std::vector<int> NumDiff::generateKeypoints(derivative_interpolator di, const ei
         std::cout << "keyPoint_method not recognized" << std::endl;
     }
 
-    // Check if last keypoint is the horizon
-    if(keypoints.back() != horizon){
-        keypoints.push_back(horizon);
-    }
+    // Enforce that last keypoint, all dofs are computed
+    keypoints.back().clear();
+    keypoints.back() = fullRow;
 
     return keypoints;
 }
 
-void NumDiff::interpolateDerivs(std::vector<int> keypoints, eigTd &Fxd, eigTd &Fud, int horizon){
-    int num_keypoints = keypoints.size();
+void NumDiff::interpolateDerivs(std::vector<std::vector<int>> keypoints, eigTd &Fxd, eigTd &Fud, int horizon){
     int dof = Fxd[0].rows() / 2;
     int num_ctrl = Fud[0].cols();
 
-    // Loop over the keypoints
-    for(int i = 0; i < num_keypoints - 1; i++){
-        int start_index = keypoints[i];
-        int end_index = keypoints[i+1];
-        int interval = end_index - start_index;
+    // Declare memory of interpolation variables
+    eigMd Fxd_start_col1;
+    eigMd Fxd_end_col1;
+    eigMd Fxd_add_col1;
 
-        eigMd Fxd_start = Fxd[start_index];
-        eigMd Fxd_end = Fxd[end_index];
-        eigMd Fxd_add = (Fxd_end - Fxd_start) / interval;
+    eigMd Fxd_start_col2;
+    eigMd Fxd_end_col2;
+    eigMd Fxd_add_col2;
 
-        eigMd Fud_start = Fud[start_index];
-        eigMd Fud_end = Fud[end_index];
-        eigMd Fud_add = (Fud_end - Fud_start) / interval;
+    eigMd Fud_start_col;
+    eigMd Fud_end_col;
+    eigMd Fud_add_col;
 
-        for(int j = 1; j < interval; j++){
-            Fxd[start_index + j] = Fxd_start + Fxd_add * j;
-            Fud[start_index + j] = Fud_start + Fud_add * j;
+
+    int start_indices[dof];
+    for(int i = 0; i < dof; i++){
+        start_indices[i] = 0;
+    }
+
+    for(int t = 1; t < horizon; t++) {
+        for(int i = 0; i < dof; i++){
+            std::vector<int> columns = keypoints[t];
+
+            if(columns.size() == 0){
+                continue;
+            }
+
+            for(int j = 0; j < columns.size(); j++){
+
+                if(i == columns[j]){
+                    Fxd_start_col1 = Fxd[start_indices[i]].block(0, i, (2*dof), 1);
+                    Fxd_end_col1 = Fxd[t].block(0, i, (2*dof), 1);
+                    Fxd_add_col1 = (Fxd_end_col1 - Fxd_start_col1) / (t - start_indices[i]);
+
+                    // Same again for column 2 which is dof + i
+                    Fxd_start_col2 = Fxd[start_indices[i]].block(0, dof + i, (2*dof), 1);
+                    Fxd_end_col2 = Fxd[t].block(0, dof + i, (2*dof), 1);
+                    Fxd_add_col2 = (Fxd_end_col2 - Fxd_start_col2) / (t - start_indices[i]);
+
+                    if(i < num_ctrl){
+                        Fud_start_col = Fud[start_indices[i]].block(0, i, (2*dof), 1);
+                        Fud_end_col = Fud[t].block(0, i, (2*dof), 1);
+                        Fud_add_col = (Fud_end_col - Fud_start_col) / (t - start_indices[i]);
+                    }
+
+                    // Loop over the indices between the start and end
+                    for(int k = start_indices[i] + 1; k < t; k++){
+                        Fxd[k].block(0, i, (2*dof), 1) = Fxd_start_col1 + Fxd_add_col1 * (k - start_indices[i]);
+                        Fxd[k].block(0, dof + i, (2*dof), 1) = Fxd_start_col2 + Fxd_add_col2 * (k - start_indices[i]);
+                        if(i < num_ctrl){
+                            Fud[k].block(0, i, (2*dof), 1) = Fud_start_col + Fud_add_col * (k - start_indices[i]);
+                        }
+                    }
+
+                    start_indices[i] = t;
+                }
+            }
         }
     }
 
-//    // Interpolate Fud
+    // Loop over the keypoints
 //    for(int i = 0; i < num_keypoints - 1; i++){
-//        int start = keypoints[i];
-//        int end = keypoints[i+1];
-//        int num_intervals = end - start;
-//        for(int j = 0; j < num_intervals; j++){
-//            double alpha = (double)j / (double)num_intervals;
-//            Fud[start + j] = (1 - alpha) * Fud[start] + alpha * Fud[end];
-//        }
-//    }
+//        int start_index = keypoints[i];
+//        int end_index = keypoints[i+1];
+//        int interval = end_index - start_index;
 //
-//    // Fill in the rest of the trajectory
-//    for(int i = 0; i < horizon; i++){
-//        if(Fxd[i].isZero()){
-//            Fxd[i] = Fxd[i-1];
-//        }
-//        if(Fud[i].isZero()){
-//            Fud[i] = Fud[i-1];
+//        eigMd Fxd_start = Fxd[start_index];
+//        eigMd Fxd_end = Fxd[end_index];
+//        eigMd Fxd_add = (Fxd_end - Fxd_start) / interval;
+//
+//        eigMd Fud_start = Fud[start_index];
+//        eigMd Fud_end = Fud[end_index];
+//        eigMd Fud_add = (Fud_end - Fud_start) / interval;
+//
+//        for(int j = 1; j < interval; j++){
+//            Fxd[start_index + j] = Fxd_start + Fxd_add * j;
+//            Fud[start_index + j] = Fud_start + Fud_add * j;
 //        }
 //    }
+
 }
 
-void NumDiff::saveLinearisation(const std::string file_prefix, eigTd Fxd, eigTd Fud, int horizon){
+void NumDiff::saveLinearisation(const std::string file_prefix, eigTd Fxd, eigTd Fud,  eigMd X, eigMd U, int horizon){
     std::string projectParentPath = __FILE__;
     projectParentPath = projectParentPath.substr(0, projectParentPath.find_last_of("/\\"));
     projectParentPath = projectParentPath.substr(0, projectParentPath.find_last_of("/\\"));
     projectParentPath = projectParentPath.substr(0, projectParentPath.find_last_of("/\\"));
     std::string rootPath = projectParentPath + "/savedTrajecInfo/" + file_prefix;
 
-    std::string filename = rootPath + "_A_matrices.csv";
+    std::string filename = rootPath + "/A_matrices.csv";
     std::cout << "filename: " << filename << std::endl;
     std::ofstream fileOutput;
     fileOutput.open(filename);
@@ -255,16 +337,68 @@ void NumDiff::saveLinearisation(const std::string file_prefix, eigTd Fxd, eigTd 
     int dof = Fxd[0].rows() / 2;
     int num_ctrl = Fud[0].cols();
 
-    // trajectory length
+    // Save the fx matrices
     for(int i = 0; i < horizon - 1; i++){
         // Row
         for(int j = 0; j < (dof); j++){
             // Column
             for(int k = 0; k < (2 * dof); k++){
-//                std::cout << Fxd[i](j, k) << ",";
                 fileOutput << Fxd[i](j + dof, k) << ",";
             }
+        }
+        fileOutput << std::endl;
+    }
 
+    fileOutput.close();
+
+    filename = rootPath + "/B_matrices.csv";
+    std::cout << "filename: " << filename << std::endl;
+    fileOutput.open(filename);
+
+    // Save the fu matrices
+    for(int i = 0; i < horizon - 1; i++){
+        // Row
+        for(int j = 0; j < (dof); j++){
+            // Column
+            for(int k = 0; k < num_ctrl; k++){
+                fileOutput << Fud[i](j + dof, k) << ",";
+            }
+        }
+        fileOutput << std::endl;
+    }
+
+    fileOutput.close();
+
+    std::cout << "X: " << X << std::endl;
+
+    filename = rootPath + "/states.csv";
+    std::cout << "filename: " << filename << std::endl;
+    fileOutput.open(filename);
+
+    // Save the fu matrices
+    for(int i = 0; i < horizon - 1; i++){
+        // Row
+        for(int j = 0; j < 2 * dof; j++){
+            // Column
+            fileOutput << X(j, i) << ",";
+        }
+        fileOutput << std::endl;
+    }
+
+    fileOutput.close();
+
+    std::cout << "U: " << U << std::endl;
+
+    filename = rootPath + "/controls.csv";
+    std::cout << "filename: " << filename << std::endl;
+    fileOutput.open(filename);
+
+    // Save the fu matrices
+    for(int i = 0; i < horizon - 1; i++){
+        // Row
+        for(int j = 0; j < num_ctrl; j++){
+            // Column
+            fileOutput << U(j, i) << ",";
         }
         fileOutput << std::endl;
     }

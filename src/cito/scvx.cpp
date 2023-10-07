@@ -93,16 +93,16 @@ trajectory SCVX::runSimulation(const eigMd &U, bool linearize, int save, double 
     std::vector<double> jerkThresholds = {0.1, 0.1};
     std::vector<double> velChange_thresholds = {0.1, 0.1};
     derivative_interpolator interpolator = {"set_interval", 2, 0, jerkThresholds, velChange_thresholds, 0};
-//    derivative_interpolator baseline = {"set_interval", 1, 0, jerkThresholds, velChange_thresholds, 0};
-    std::vector<int> keypoints = nd.generateKeypoints(interpolator, XSucc, cp->N - 1);
-//    std::vector<int> baseline_keypoints = nd.generateKeypoints(baseline, XSucc, cp->N - 1);
+    std::vector<std::vector<int>> keypoints = nd.generateKeypoints(interpolator, XSucc, cp->N);
 
-    for(int i = 0; i < keypoints.size(); i++){
-        std::cout << keypoints[i] << " ";
-    }
-    std::cout << std::endl;
+//    for(int i = 0; i < keypoints.size(); i++){
+//        std::cout << i << " : ";
+//        for(int j = 0; j < keypoints[i].size(); j++){
+//            std::cout << keypoints[i][j] << " ";
+//        }
+//        std::cout << std::endl;
+//    }
 
-    int keypoint_counter = 0;
     // rollout (and linearize) the dynamics
     for (int i = 0; i < cp->N; i++)
     {
@@ -116,30 +116,30 @@ trajectory SCVX::runSimulation(const eigMd &U, bool linearize, int save, double 
             Fx[i].setZero();
             Fu[i].setZero();
             // Only linearize the dynamics when a keypoint is reached
-            if(i == keypoints[keypoint_counter]){
-                keypoint_counter++;
-                nd.linDyn(d, U.col(i), Fx[i].data(), Fu[i].data(), compensateBias);
+            std::vector<int> cols = keypoints[i];
+            if(cols.size() > 0){
+                nd.linDyn(d, U.col(i), Fx[i].data(), Fu[i].data(), compensateBias, cols);
+
             }
         }
         // take tc/dt steps
         cc->takeStep(d, U.col(i), save, compensateBias);
     }
 
-    if (linearize)
-    {
-        nd.saveLinearisation("before", Fx, Fu, cp->N);
-    }
-
     if(linearize){
         if(!(interpolator.keyPoint_method == "set_interval" && interpolator.min_n == 1)){
+            std::cout << "lets interpolate \n";
             nd.interpolateDerivs(keypoints, Fx, Fu, cp->N);
         }
     }
 
-    if (linearize)
-    {
-        nd.saveLinearisation("after", Fx, Fu, cp->N);
-    }
+//    if (linearize)
+//    {
+//        std::string folder_name = std::to_string(cp->testNumber);
+//        nd.saveLinearisation(folder_name, Fx, Fu, XSucc, U, cp->N);
+//        std::cout << "program finished" << std::endl;
+//        exit(0);
+//    }
 
     // initialize d
 //    mju_copy(d->qpos, m->key_qpos, m->nq);
