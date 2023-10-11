@@ -12,7 +12,15 @@ NumDiff::NumDiff(const mjModel *m_, Params *cp_, Control *cc_) : m(m_), cp(cp_),
     xNewP.resize(cp->n);
     xNewN.resize(cp->n);
     uTemp.resize(cp->m);
+
+    for(int i = 0; i < cp->N + 1; i++)
+    {
+        rollout_data.push_back(mj_makeData(m));
+    }
+
+    std::cout << "rollout data made from model \n";
 }
+
 // ***** FUNCTIONS *************************************************************
 // copyTakeStep: sets xNew to the integration of data given a control input
 void NumDiff::copyTakeStep(const mjData *dMain, const eigVd &u, double *xNew, double compensateBias)
@@ -58,9 +66,6 @@ void NumDiff::hardWorker(const mjData *dMain, const eigVd &uMain, double *deriv,
     mju_copy(d->xfrc_applied, dMain->xfrc_applied, 6 * m->nbody);
     mju_copy(d->ctrl, dMain->ctrl, m->nu);
     // finite-difference over positions
-//    std::cout << "model nv: " << m->nv << std::endl;
-//    std::cout << "model nq: " << m->nq << std::endl;
-//    std::cout << "model nu: " << m->nu << std::endl;
 
     for (int i = 0; i < m->nv; i++)
     {
@@ -183,6 +188,18 @@ void NumDiff::hardWorker(const mjData *dMain, const eigVd &uMain, double *deriv,
     mj_deleteData(d);
 }
 
+void NumDiff::save_data_to_rollout_data(mjData *dmain, int index){
+
+    rollout_data[index]->time = dmain->time;
+    mju_copy(rollout_data[index]->qpos, dmain->qpos, m->nq);
+    mju_copy(rollout_data[index]->qvel, dmain->qvel, m->nv);
+    mju_copy(rollout_data[index]->qacc, dmain->qacc, m->nv);
+    mju_copy(rollout_data[index]->qacc_warmstart, dmain->qacc_warmstart, m->nv);
+    mju_copy(rollout_data[index]->qfrc_applied, dmain->qfrc_applied, m->nv);
+    mju_copy(rollout_data[index]->xfrc_applied, dmain->xfrc_applied, 6 * m->nbody);
+    mju_copy(rollout_data[index]->ctrl, dmain->ctrl, m->nu);
+}
+
 // linDyn: calculates derivatives of the state and control trajectories
 void NumDiff::linDyn(const mjData *dMain, const eigVd &uMain, double *Fxd, double *Fud, double compensateBias, std::vector<int> cols)
 {
@@ -228,7 +245,8 @@ std::vector<std::vector<int>> NumDiff::generateKeypoints(derivative_interpolator
 
     }
     else if(di.keyPoint_method == "iterative_error"){
-        keypoints = generateKeypointsIterativeError(di, horizon);
+//        keypoints = generateKeypointsIterativeError(di, horizon);
+        std::cout << "method iterative error recognized, but it shouldn't have reached this function" << std::endl;
     }
     else{
         std::cout << "keyPoint_method not recognized" << std::endl;
@@ -366,197 +384,6 @@ std::vector<std::vector<int>> NumDiff::generateKeypointsMagnitudeVelChange(deriv
     }
 
     return keypoints;
-}
-
-std::vector<std::vector<int>> NumDiff::generateKeypointsIterativeError(derivative_interpolator di, int horizon){
-    int dof = cp->n / 2;
-    std::vector<std::vector<int>> keypoints;
-    bool binsComplete[dof];
-    std::vector<indexTuple> indexTuples;
-    int startIndex = 0;
-    int endIndex = horizon;
-
-    // Initialise variables
-    for(int i = 0; i < dof; i++){
-        binsComplete[i] = false;
-        computedKeyPoints.push_back(std::vector<int>());
-    }
-
-    for(int i = 0; i < horizon; i++){
-        keypoints.push_back(std::vector<int>());
-    }
-
-    // Loop through all dofs in the system
-//#pragma omp parallel for
-    for(int i = 0; i < dof; i++){
-        std::vector<indexTuple> listOfIndicesCheck;
-        indexTuple initialTuple;
-        initialTuple.startIndex = startIndex;
-        initialTuple.endIndex = endIndex;
-        listOfIndicesCheck.push_back(initialTuple);
-
-        std::vector<indexTuple> subListIndices;
-        std::vector<int> subListWithMidpoints;
-
-        while(!binsComplete[i]){
-            bool allChecksComplete = true;
-
-            for(int j = 0; j < listOfIndicesCheck.size(); j++) {
-
-                int midIndex = (listOfIndicesCheck[j].startIndex + listOfIndicesCheck[j].endIndex) / 2;
-//                cout <<"dof: " << i <<  ": index tuple: " << listOfIndicesCheck[j].startIndex << " " << listOfIndicesCheck[j].endIndex << endl;
-                bool approximationGood = checkDoFColumnError(listOfIndicesCheck[j], i);
-
-                if (!approximationGood) {
-                    allChecksComplete = false;
-                    indexTuple tuple1;
-                    tuple1.startIndex = listOfIndicesCheck[j].startIndex;
-                    tuple1.endIndex = midIndex;
-                    indexTuple tuple2;
-                    tuple2.startIndex = midIndex;
-                    tuple2.endIndex = listOfIndicesCheck[j].endIndex;
-                    subListIndices.push_back(tuple1);
-                    subListIndices.push_back(tuple2);
-                }
-                else{
-                    subListWithMidpoints.push_back(listOfIndicesCheck[j].startIndex);
-                    subListWithMidpoints.push_back(midIndex);
-                    subListWithMidpoints.push_back(listOfIndicesCheck[j].endIndex);
-                }
-            }
-
-            if(allChecksComplete){
-                binsComplete[i] = true;
-                subListWithMidpoints.clear();
-            }
-
-            listOfIndicesCheck = subListIndices;
-            subListIndices.clear();
-        }
-    }
-
-    // Loop over the horizon
-    for(int i = 0; i < horizon; i++){
-        // Loop over the dofs
-        for(int j = 0; j < dof; j++){
-            // Loop over the computed key points per dof
-            for(int k = 0; k < computedKeyPoints[j].size(); k++){
-                // If the current index is a computed key point
-                if(i == computedKeyPoints[j][k]){
-                    keypoints[i].push_back(j);
-                }
-            }
-        }
-    }
-
-    // Sort list into order
-    for(int i = 0; i < horizon; i++){
-        std::sort(keypoints[i].begin(), keypoints[i].end());
-    }
-
-    // Remove duplicates
-    for(int i = 0; i < horizon; i++){
-        keypoints[i].erase(std::unique(keypoints[i].begin(), keypoints[i].end()), keypoints[i].end());
-    }
-
-    return keypoints;
-}
-
-bool NumDiff::checkDoFColumnError(indexTuple indices, int dof){
-
-    MatrixXd midColumnsApprox[2];
-    for(int i = 0; i < 2; i++){
-        midColumnsApprox[i] = MatrixXd::Zero(activeModelTranslator->stateVectorSize, 1);
-    }
-
-    int midIndex = (indices.startIndex + indices.endIndex) / 2;
-    if((indices.endIndex - indices.startIndex) <=  activeDerivativeInterpolator.minN){
-        return true;
-    }
-
-    MatrixXd blank1, blank2, blank3, blank4;
-
-    bool startIndexExists = false;
-    bool midIndexExists = false;
-    bool endIndexExists = false;
-
-    for(int i = 0; i < computedKeyPoints[dofIndex].size(); i++){
-        if(computedKeyPoints[dofIndex][i] == indices.startIndex){
-            startIndexExists = true;
-        }
-
-        if(computedKeyPoints[dofIndex][i] == midIndex){
-            midIndexExists = true;
-        }
-
-        if(computedKeyPoints[dofIndex][i] == indices.endIndex){
-            endIndexExists = true;
-        }
-    }
-
-    std::vector<int> cols;
-    cols.push_back(dofIndex);
-
-    int tid = omp_get_thread_num();
-
-    if(!startIndexExists){
-        activeDifferentiator->getDerivatives(A[indices.startIndex], B[indices.startIndex], cols, blank1, blank2, blank3, blank4, false, indices.startIndex, false, tid);
-        computedKeyPoints[dofIndex].push_back(indices.startIndex);
-    }
-
-    if(!midIndexExists){
-        activeDifferentiator->getDerivatives(A[midIndex], B[midIndex], cols, blank1, blank2, blank3, blank4, false, midIndex, false, tid);
-        computedKeyPoints[dofIndex].push_back(midIndex);
-    }
-
-    if(!endIndexExists){
-        activeDifferentiator->getDerivatives(A[indices.endIndex], B[indices.endIndex], cols, blank1, blank2, blank3, blank4, false, indices.endIndex, false, tid);
-        computedKeyPoints[dofIndex].push_back(indices.endIndex);
-    }
-
-    midColumnsApprox[0] = (A[indices.startIndex].block(0, dofIndex, dof*2, 1) + A[indices.endIndex].block(0, dofIndex, dof*2, 1)) / 2;
-    midColumnsApprox[1] = (A[indices.startIndex].block(0, dofIndex + dof, dof*2, 1) + A[indices.endIndex].block(0, dofIndex + dof, dof*2, 1)) / 2;
-
-
-    bool approximationGood = false;
-    int dof = activeModelTranslator->dof;
-    double errorSum = 0.0f;
-    int counter = 0;
-
-    for(int i = 0; i < 2; i++){
-        int A_col_indices[2] = {dofIndex, dofIndex + dof};
-        for(int j = dof; j < activeModelTranslator->stateVectorSize; j++){
-            double sqDiff = pow((A[midIndex](j, A_col_indices[i]) - midColumnsApprox[i](j, 0)),2);
-
-            counter++;
-            errorSum += sqDiff;
-        }
-//        cout << "errorSum: " << errorSum << "\n";
-    }
-
-    double averageError;
-    if(counter > 0){
-        averageError = errorSum / counter;
-    }
-    else{
-        averageError = 0.0f;
-    }
-
-//    if(dofIndex == 0){
-//        cout << "average error: " << averageError << "\n";
-//    }
-
-//    cout << "average error: " << averageError << "\n";
-//    cout << "num valid: " << counter << "\n";
-//    cout << "num too small: " << counterTooSmall << "\n";
-//    cout << "num too large: " << counterTooLarge << "\n";
-
-    // 0.00005
-    if(averageError <  di.iterativeErrorThreshold){ //0.00001
-        approximationGood = true;
-    }
-
-    return approximationGood;
 }
 
 void NumDiff::interpolateDerivs(std::vector<std::vector<int>> keypoints, eigTd &Fxd, eigTd &Fud, int horizon){

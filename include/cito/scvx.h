@@ -47,6 +47,12 @@ private:
     double *time_derivs;
     double *time_qp;
 
+    // Iterative error methods for keypoints
+    std::vector<std::vector<int>> generateKeypointsIterativeError(derivative_interpolator di, int horizon, const eigMd U, double compensateBias);
+    bool checkDoFColumnError(derivative_interpolator di, indexTuple indices, int dofIndex, const eigMd U, double compensateBias);
+
+    std::vector<std::vector<int>> computedKeyPoints;        // Stores the keypoints computed via iterative error so re-computation isn't performed
+
 
     /// Trajectories
     eigMd XSucc, dX, XTilde;

@@ -90,13 +90,38 @@ trajectory SCVX::runSimulation(const eigMd &U, bool linearize, int save, double 
     mj_forward(m, d);
     cc->setControl(d, U.col(0), compensateBias);
 
+//    std::cout << "before rollout occurs \n";
+
+    // Rollout the dynamics and save data to buffer
+    nd.save_data_to_rollout_data(d, 0);
+    for (int i = 0; i < cp->N; i++)
+    {
+        mj_forward(m, d);
+        // get the current state values
+        XSucc.col(i).setZero();
+        XSucc.col(i) = cp->getState(d);
+        // take tc/dt steps
+        cc->takeStep(d, U.col(i), save, compensateBias);
+
+        // save data to buffer
+        nd.save_data_to_rollout_data(d, i + 1);
+    }
+
+//    std::cout << "rollout and save occured \n";
+
+
     std::vector<std::vector<int>> keypoints;
     std::vector<double> jerkThresholds = {0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05};
     std::vector<double> velChange_thresholds = {0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1};
     derivative_interpolator interpolator = {"magvel_change", 2, 5, jerkThresholds, velChange_thresholds, 0.1};
     if(linearize){
 
-        keypoints = nd.generateKeypoints(interpolator, XSucc, cp->N);
+        if(interpolator.keyPoint_method == "iterative_error"){
+            generateKeypointsIterativeError(interpolator, cp->N, U, compensateBias);
+        }
+        else{
+            keypoints = nd.generateKeypoints(interpolator, XSucc, cp->N);
+        }
 
         for(int i = 0; i < keypoints.size(); i++){
             std::cout << i << " : ";
@@ -107,28 +132,42 @@ trajectory SCVX::runSimulation(const eigMd &U, bool linearize, int save, double 
         }
     }
 
-    // rollout (and linearize) the dynamics
-    for (int i = 0; i < cp->N; i++)
-    {
-        mj_forward(m, d);
-        // get the current state values
-        XSucc.col(i).setZero();
-        XSucc.col(i) = cp->getState(d);
-        // linearization
-        if (linearize)
-        {
+    // Compute the derivatives, but not for iterative error keypoint method as that has already computed
+    // the derivatives
+    if(linearize && interpolator.keyPoint_method != "iterative_error"){
+        for (int i = 0; i < cp->N; i++){
             Fx[i].setZero();
             Fu[i].setZero();
             // Only linearize the dynamics when a keypoint is reached
             std::vector<int> cols = keypoints[i];
             if(cols.size() > 0){
-                nd.linDyn(d, U.col(i), Fx[i].data(), Fu[i].data(), compensateBias, cols);
-
+                nd.linDyn(nd.rollout_data[i], U.col(i), Fx[i].data(), Fu[i].data(), compensateBias, cols);
             }
         }
-        // take tc/dt steps
-        cc->takeStep(d, U.col(i), save, compensateBias);
     }
+
+    // rollout (and linearize) the dynamics
+//    for (int i = 0; i < cp->N; i++)
+//    {
+//        mj_forward(m, d);
+//        // get the current state values
+//        XSucc.col(i).setZero();
+//        XSucc.col(i) = cp->getState(d);
+//        // linearization
+//        if (linearize)
+//        {
+//            Fx[i].setZero();
+//            Fu[i].setZero();
+//            // Only linearize the dynamics when a keypoint is reached
+//            std::vector<int> cols = keypoints[i];
+//            if(cols.size() > 0){
+//                nd.linDyn(d, U.col(i), Fx[i].data(), Fu[i].data(), compensateBias, cols);
+//
+//            }
+//        }
+//        // take tc/dt steps
+//        cc->takeStep(d, U.col(i), save, compensateBias);
+//    }
 
     if(linearize){
         if(!(interpolator.keyPoint_method == "set_interval" && interpolator.min_n == 1)){
@@ -312,6 +351,181 @@ eigMd SCVX::solveSCVX(const eigMd &U0)
     std::cout << "Derivatives time: " << derivsTime << " seconds\n\n";
     std::cout << "QP time: " << qpTime << " seconds\n\n";
     return USucc;
+}
+
+std::vector<std::vector<int>> SCVX::generateKeypointsIterativeError(derivative_interpolator di, int horizon, const eigMd U, double compensateBias){
+    int dof = cp->n / 2;
+    std::vector<std::vector<int>> keypoints;
+    bool binsComplete[dof];
+    std::vector<indexTuple> indexTuples;
+    int startIndex = 0;
+    int endIndex = horizon;
+
+    // Initialise variables
+    for(int i = 0; i < dof; i++){
+        binsComplete[i] = false;
+        computedKeyPoints.push_back(std::vector<int>());
+    }
+
+    for(int i = 0; i < horizon; i++){
+        keypoints.push_back(std::vector<int>());
+    }
+
+    // Loop through all dofs in the system
+//#pragma omp parallel for
+    for(int i = 0; i < dof; i++){
+        std::vector<indexTuple> listOfIndicesCheck;
+        indexTuple initialTuple;
+        initialTuple.startIndex = startIndex;
+        initialTuple.endIndex = endIndex;
+        listOfIndicesCheck.push_back(initialTuple);
+
+        std::vector<indexTuple> subListIndices;
+        std::vector<int> subListWithMidpoints;
+
+        while(!binsComplete[i]){
+            bool allChecksComplete = true;
+
+            for(int j = 0; j < listOfIndicesCheck.size(); j++) {
+
+                int midIndex = (listOfIndicesCheck[j].startIndex + listOfIndicesCheck[j].endIndex) / 2;
+//                cout <<"dof: " << i <<  ": index tuple: " << listOfIndicesCheck[j].startIndex << " " << listOfIndicesCheck[j].endIndex << endl;
+                bool approximationGood = checkDoFColumnError(di, listOfIndicesCheck[j], i, U, compensateBias);
+
+                if (!approximationGood) {
+                    allChecksComplete = false;
+                    indexTuple tuple1;
+                    tuple1.startIndex = listOfIndicesCheck[j].startIndex;
+                    tuple1.endIndex = midIndex;
+                    indexTuple tuple2;
+                    tuple2.startIndex = midIndex;
+                    tuple2.endIndex = listOfIndicesCheck[j].endIndex;
+                    subListIndices.push_back(tuple1);
+                    subListIndices.push_back(tuple2);
+                }
+                else{
+                    subListWithMidpoints.push_back(listOfIndicesCheck[j].startIndex);
+                    subListWithMidpoints.push_back(midIndex);
+                    subListWithMidpoints.push_back(listOfIndicesCheck[j].endIndex);
+                }
+            }
+
+            if(allChecksComplete){
+                binsComplete[i] = true;
+                subListWithMidpoints.clear();
+            }
+
+            listOfIndicesCheck = subListIndices;
+            subListIndices.clear();
+        }
+    }
+
+    // Loop over the horizon
+    for(int i = 0; i < horizon; i++){
+        // Loop over the dofs
+        for(int j = 0; j < dof; j++){
+            // Loop over the computed key points per dof
+            for(int k = 0; k < computedKeyPoints[j].size(); k++){
+                // If the current index is a computed key point
+                if(i == computedKeyPoints[j][k]){
+                    keypoints[i].push_back(j);
+                }
+            }
+        }
+    }
+
+    // Sort list into order
+    for(int i = 0; i < horizon; i++){
+        std::sort(keypoints[i].begin(), keypoints[i].end());
+    }
+
+    // Remove duplicates
+    for(int i = 0; i < horizon; i++){
+        keypoints[i].erase(std::unique(keypoints[i].begin(), keypoints[i].end()), keypoints[i].end());
+    }
+
+    return keypoints;
+}
+
+bool SCVX::checkDoFColumnError(derivative_interpolator di, indexTuple indices, int dofIndex, const eigMd U, double compensateBias){
+    int dof = cp->n / 2;
+    bool approximationGood = false;
+    double errorSum = 0.0f;
+    int counter = 0;
+
+    Eigen::MatrixXd midColumnsApprox[2];
+    for(int i = 0; i < 2; i++){
+        midColumnsApprox[i] = Eigen::MatrixXd::Zero(cp->n, 1);
+    }
+
+    int midIndex = (indices.startIndex + indices.endIndex) / 2;
+    if((indices.endIndex - indices.startIndex) <=  di.min_n){
+        return true;
+    }
+
+    bool startIndexExists = false;
+    bool midIndexExists = false;
+    bool endIndexExists = false;
+
+    for(int i = 0; i < computedKeyPoints[dofIndex].size(); i++){
+        if(computedKeyPoints[dofIndex][i] == indices.startIndex){
+            startIndexExists = true;
+        }
+
+        if(computedKeyPoints[dofIndex][i] == midIndex){
+            midIndexExists = true;
+        }
+
+        if(computedKeyPoints[dofIndex][i] == indices.endIndex){
+            endIndexExists = true;
+        }
+    }
+
+    std::vector<int> cols;
+    cols.push_back(dofIndex);
+
+    if(!startIndexExists){
+        nd.linDyn(nd.rollout_data[indices.startIndex], U.col(indices.startIndex), Fx[indices.startIndex].data(), Fu[indices.startIndex].data(), compensateBias, cols);
+        computedKeyPoints[dofIndex].push_back(indices.startIndex);
+    }
+
+    if(!midIndexExists){
+        nd.linDyn(nd.rollout_data[midIndex], U.col(midIndex), Fx[midIndex].data(), Fu[midIndex].data(), compensateBias, cols);
+        computedKeyPoints[dofIndex].push_back(midIndex);
+    }
+
+    if(!endIndexExists){
+        nd.linDyn(nd.rollout_data[indices.endIndex], U.col(indices.endIndex), Fx[indices.endIndex].data(), Fu[indices.endIndex].data(), compensateBias, cols);
+        computedKeyPoints[dofIndex].push_back(indices.endIndex);
+    }
+
+    midColumnsApprox[0] = (Fx[indices.startIndex].block(0, dofIndex, dof*2, 1) + Fx[indices.endIndex].block(0, dofIndex, dof*2, 1)) / 2;
+    midColumnsApprox[1] = (Fx[indices.startIndex].block(0, dofIndex + dof, dof*2, 1) + Fx[indices.endIndex].block(0, dofIndex + dof, dof*2, 1)) / 2;
+
+    for(int i = 0; i < 2; i++){
+        int A_col_indices[2] = {dofIndex, dofIndex + dof};
+        for(int j = 0; j < cp->n; j++){
+            double sqDiff = pow((Fx[midIndex](j, A_col_indices[i]) - midColumnsApprox[i](j, 0)),2);
+
+            counter++;
+            errorSum += sqDiff;
+        }
+    }
+
+    double averageError;
+    if(counter > 0){
+        averageError = errorSum / counter;
+    }
+    else{
+        averageError = 0.0f;
+    }
+
+    // 0.00005
+    if(averageError <  di.error_threshold){ //0.00001
+        approximationGood = true;
+    }
+
+    return approximationGood;
 }
 
 // refresh: refreshes SCVX variables for a new run
