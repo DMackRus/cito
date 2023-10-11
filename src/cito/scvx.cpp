@@ -113,11 +113,12 @@ trajectory SCVX::runSimulation(const eigMd &U, bool linearize, int save, double 
     std::vector<std::vector<int>> keypoints;
     std::vector<double> jerkThresholds = {0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05};
     std::vector<double> velChange_thresholds = {0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1};
-    derivative_interpolator interpolator = {"magvel_change", 2, 5, jerkThresholds, velChange_thresholds, 0.1};
+    derivative_interpolator interpolator = {"iterative_error", 1, 5, jerkThresholds, velChange_thresholds, 0.1};
     if(linearize){
 
         if(interpolator.keyPoint_method == "iterative_error"){
-            generateKeypointsIterativeError(interpolator, cp->N, U, compensateBias);
+            computedKeyPoints.clear();
+            keypoints = generateKeypointsIterativeError(interpolator, cp->N, U, compensateBias);
         }
         else{
             keypoints = nd.generateKeypoints(interpolator, XSucc, cp->N);
@@ -169,9 +170,11 @@ trajectory SCVX::runSimulation(const eigMd &U, bool linearize, int save, double 
 //        cc->takeStep(d, U.col(i), save, compensateBias);
 //    }
 
+//    std::cout << Fx[0] << std::endl;
+//    std::cout << Fu[0] << std::endl;
+
     if(linearize){
         if(!(interpolator.keyPoint_method == "set_interval" && interpolator.min_n == 1)){
-            std::cout << "lets interpolate \n";
             nd.interpolateDerivs(keypoints, Fx, Fu, cp->N);
         }
     }
@@ -359,7 +362,7 @@ std::vector<std::vector<int>> SCVX::generateKeypointsIterativeError(derivative_i
     bool binsComplete[dof];
     std::vector<indexTuple> indexTuples;
     int startIndex = 0;
-    int endIndex = horizon;
+    int endIndex = horizon - 1;
 
     // Initialise variables
     for(int i = 0; i < dof; i++){

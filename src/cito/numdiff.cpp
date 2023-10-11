@@ -65,8 +65,8 @@ void NumDiff::hardWorker(const mjData *dMain, const eigVd &uMain, double *deriv,
     mju_copy(d->qfrc_applied, dMain->qfrc_applied, m->nv);
     mju_copy(d->xfrc_applied, dMain->xfrc_applied, 6 * m->nbody);
     mju_copy(d->ctrl, dMain->ctrl, m->nu);
-    // finite-difference over positions
 
+    // finite-difference over positions
     for (int i = 0; i < m->nv; i++)
     {
         bool computeCol = false;
@@ -206,8 +206,28 @@ void NumDiff::linDyn(const mjData *dMain, const eigVd &uMain, double *Fxd, doubl
     // TODO: consider doing the memory allocation/freeing in the constructor/destructor
     double *deriv = (double *)mju_malloc(sizeof(double) * cp->n * (cp->n + cp->m));
     this->hardWorker(dMain, uMain, deriv, compensateBias, cols);
-    mju_copy(Fxd, deriv, cp->n * cp->n);
-    mju_copy(Fud, deriv + cp->n * cp->n, cp->n * cp->m);
+
+    int dof = cp->n / 2;
+
+    // loop over the colums
+    for(int i = 0; i < cols.size(); i++){
+        int col_index = cols[i];
+        // copy data over to Fxd and Fud
+        for(int j = 0; j < cp->n; j++){
+            Fxd[j + (cp->n * col_index)] = deriv[j + (cp->n * col_index)];
+            Fxd[j + (cp->n * (col_index + dof))] = deriv[j + (cp->n * (col_index + dof))];
+        }
+
+        if(col_index < cp->m){
+            for(int j = 0; j < cp->n; j++){
+                Fud[j + (cp->n * col_index)] = deriv[(cp->n * cp->n) + j + (cp->n * col_index)];
+            }
+        }
+    }
+
+
+//    mju_copy(Fxd, deriv, cp->n * cp->n);
+//    mju_copy(Fud, deriv + cp->n * cp->n, cp->n * cp->m);
     mju_free(deriv);
 }
 
@@ -232,6 +252,10 @@ std::vector<std::vector<int>> NumDiff::generateKeypoints(derivative_interpolator
             else{
                 keypoints.push_back(emptyRow);
             }
+        }
+
+        for(int i = 0; i < dof; i++){
+            keypoints.back().push_back(i);
         }
 
     }

@@ -50,7 +50,6 @@ public:
     // Supporting functions for generating keypoints
     eigMd getJerkProfile(const eigMd X, int horizon);
 
-
     void interpolateDerivs(std::vector<std::vector<int>> keypoints, eigTd &Fxd, eigTd &Fud, int horizon);
 
     // Keypoint variables
