@@ -199,12 +199,14 @@ std::vector<std::vector<int>> NumDiff::generateKeypoints(derivative_interpolator
     std::vector<int> fullRow;
     std::vector<int> emptyRow;
 
-    for(int i = 0; i < horizon; i++){
-        fullRow.push_back(i);
-    }
-    keypoints.push_back(fullRow);
+    int dof = X.rows() / 2;
 
     if(di.keyPoint_method == "set_interval"){
+        for(int i = 0; i < dof; i++){
+            fullRow.push_back(i);
+        }
+        keypoints.push_back(fullRow);
+
 
         for(int i = 1; i < horizon; i++){
             if(i % di.min_n == 0){
@@ -217,23 +219,344 @@ std::vector<std::vector<int>> NumDiff::generateKeypoints(derivative_interpolator
 
     }
     else if(di.keyPoint_method == "adaptive_jerk"){
+        eigMd jerk_profile = getJerkProfile(X, horizon);
+        keypoints = generateKeypointsAdaptiveJerk(di, jerk_profile, horizon);
 
     }
     else if(di.keyPoint_method == "magvel_change"){
+        keypoints = generateKeypointsMagnitudeVelChange(di, X, horizon);
 
     }
     else if(di.keyPoint_method == "iterative_error"){
-
+        keypoints = generateKeypointsIterativeError(di, horizon);
     }
     else{
         std::cout << "keyPoint_method not recognized" << std::endl;
     }
 
-    // Enforce that last keypoint, all dofs are computed
-    keypoints.back().clear();
-    keypoints.back() = fullRow;
+    return keypoints;
+}
+
+std::vector<std::vector<int>> NumDiff::generateKeypointsAdaptiveJerk(derivative_interpolator di, const eigMd jerk_profile, int horizon){
+    std::vector<std::vector<int>> keypoints;
+    int dof = jerk_profile.rows();
+
+    for(int t = 0; t < horizon; t++){
+        keypoints.push_back(std::vector<int>());
+    }
+
+    // Enforce that first keypoint, all dofs are computed
+    for(int i = 0; i < dof; i++){
+        keypoints[0].push_back(i);
+    }
+
+    int lastIndices[dof];
+    for(int i = 0; i < dof; i++){
+        lastIndices[i] = 0;
+    }
+
+    // Loop over the trajectory
+    for(int j = 0; j < dof; j++){
+        for(int i = 0; i < jerk_profile.cols(); i++){
+
+            if((i - lastIndices[j]) >= di.min_n) {
+                // Check if the jerk is above the threshold
+                if (jerk_profile(i, j) > di.jerk_thresholds[j]) {
+                    keypoints[i].push_back(j);
+                    lastIndices[j] = i;
+                }
+            }
+
+            if((i - lastIndices[j]) >= di.max_n){
+                keypoints[i].push_back(j);
+                lastIndices[j] = i;
+            }
+        }
+    }
+
+    // Enforce that the last time-step, all dofs are computed
+    for(int i = 0; i < dof; i++){
+        keypoints.back().push_back(i);
+    }
 
     return keypoints;
+}
+
+eigMd NumDiff::getJerkProfile(const eigMd X, int horizon){
+    int dof = cp->n / 2;
+    eigMd jerk_profile = eigMd::Zero(dof, horizon - 2);
+
+    for(int i = 0; i < horizon - 2; i++){
+        for(int j = 0; j < dof; j++){
+            jerk_profile(j, i) = X(j + dof, i + 2) - 2 * X(j + dof, i + 1) + X(j + dof, i);
+        }
+    }
+
+    return jerk_profile;
+}
+
+std::vector<std::vector<int>> NumDiff::generateKeypointsMagnitudeVelChange(derivative_interpolator di, const eigMd X, int horizon){
+    std::vector<std::vector<int>> keypoints;
+
+    int dof = cp->n / 2;
+
+    for(int t = 0; t < horizon; t++){
+        keypoints.push_back(std::vector<int>());
+    }
+
+    for(int i = 0; i < dof; i++){
+        keypoints[0].push_back(i);
+    }
+
+    // Keeps track of interval from last keypoint for this dof
+    std::vector<int> lastKeypointCounter = std::vector<int>(dof, 0);
+    std::vector<double> lastVelValue = std::vector<double>(dof, 0);
+    std::vector<double> lastVelDirection = std::vector<double>(dof, 0);
+
+    for(int i = 0; i < dof; i++){
+        lastVelValue[i] = X(i + dof, 0);
+    }
+
+    // Loop over the velocity dofs
+    for(int i = 0; i < dof; i++){
+        // Loop over the horizon
+        for(int t = 1; t < horizon; t++){
+
+            lastKeypointCounter[i]++;
+            double currentVelDirection = X(i + dof, t) - X(i + dof, t - 1);
+            double currentVelChangeSinceKeypoint = X(i + dof, t) - lastVelValue[i];
+
+            // If the vel change is above the required threshold
+            if(lastKeypointCounter[i] >= di.min_n){
+                if(abs(currentVelChangeSinceKeypoint) > di.velChange_thresholds[i]){
+                    keypoints[t].push_back(i);
+                    lastVelValue[i] = X(i + dof, t);
+                    lastKeypointCounter[i] = 0;
+                    continue;
+                }
+            }
+
+            // If the interval is greater than minN
+            if(lastKeypointCounter[i] >= di.min_n){
+                // If the direction of the velocity has changed
+                if(currentVelDirection * lastVelDirection[i] < 0){
+                    keypoints[t].push_back(i);
+                    lastVelValue[i] = X(i + dof, t);
+                    lastKeypointCounter[i] = 0;
+                    continue;
+                }
+            }
+            else{
+                lastVelDirection[i] = currentVelDirection;
+            }
+
+            // If interval is greater than maxN
+            if(lastKeypointCounter[i] >= di.max_n){
+                keypoints[t].push_back(i);
+                lastVelValue[i] = X(i + dof, t);
+                lastKeypointCounter[i] = 0;
+                continue;
+            }
+        }
+    }
+
+    // Enforce last keypoint for all dofs at horizonLength - 1
+    for(int i = 0; i < dof; i++){
+        keypoints.back().push_back(i);
+    }
+
+    return keypoints;
+}
+
+std::vector<std::vector<int>> NumDiff::generateKeypointsIterativeError(derivative_interpolator di, int horizon){
+    int dof = cp->n / 2;
+    std::vector<std::vector<int>> keypoints;
+    bool binsComplete[dof];
+    std::vector<indexTuple> indexTuples;
+    int startIndex = 0;
+    int endIndex = horizon;
+
+    // Initialise variables
+    for(int i = 0; i < dof; i++){
+        binsComplete[i] = false;
+        computedKeyPoints.push_back(std::vector<int>());
+    }
+
+    for(int i = 0; i < horizon; i++){
+        keypoints.push_back(std::vector<int>());
+    }
+
+    // Loop through all dofs in the system
+//#pragma omp parallel for
+    for(int i = 0; i < dof; i++){
+        std::vector<indexTuple> listOfIndicesCheck;
+        indexTuple initialTuple;
+        initialTuple.startIndex = startIndex;
+        initialTuple.endIndex = endIndex;
+        listOfIndicesCheck.push_back(initialTuple);
+
+        std::vector<indexTuple> subListIndices;
+        std::vector<int> subListWithMidpoints;
+
+        while(!binsComplete[i]){
+            bool allChecksComplete = true;
+
+            for(int j = 0; j < listOfIndicesCheck.size(); j++) {
+
+                int midIndex = (listOfIndicesCheck[j].startIndex + listOfIndicesCheck[j].endIndex) / 2;
+//                cout <<"dof: " << i <<  ": index tuple: " << listOfIndicesCheck[j].startIndex << " " << listOfIndicesCheck[j].endIndex << endl;
+                bool approximationGood = checkDoFColumnError(listOfIndicesCheck[j], i);
+
+                if (!approximationGood) {
+                    allChecksComplete = false;
+                    indexTuple tuple1;
+                    tuple1.startIndex = listOfIndicesCheck[j].startIndex;
+                    tuple1.endIndex = midIndex;
+                    indexTuple tuple2;
+                    tuple2.startIndex = midIndex;
+                    tuple2.endIndex = listOfIndicesCheck[j].endIndex;
+                    subListIndices.push_back(tuple1);
+                    subListIndices.push_back(tuple2);
+                }
+                else{
+                    subListWithMidpoints.push_back(listOfIndicesCheck[j].startIndex);
+                    subListWithMidpoints.push_back(midIndex);
+                    subListWithMidpoints.push_back(listOfIndicesCheck[j].endIndex);
+                }
+            }
+
+            if(allChecksComplete){
+                binsComplete[i] = true;
+                subListWithMidpoints.clear();
+            }
+
+            listOfIndicesCheck = subListIndices;
+            subListIndices.clear();
+        }
+    }
+
+    // Loop over the horizon
+    for(int i = 0; i < horizon; i++){
+        // Loop over the dofs
+        for(int j = 0; j < dof; j++){
+            // Loop over the computed key points per dof
+            for(int k = 0; k < computedKeyPoints[j].size(); k++){
+                // If the current index is a computed key point
+                if(i == computedKeyPoints[j][k]){
+                    keypoints[i].push_back(j);
+                }
+            }
+        }
+    }
+
+    // Sort list into order
+    for(int i = 0; i < horizon; i++){
+        std::sort(keypoints[i].begin(), keypoints[i].end());
+    }
+
+    // Remove duplicates
+    for(int i = 0; i < horizon; i++){
+        keypoints[i].erase(std::unique(keypoints[i].begin(), keypoints[i].end()), keypoints[i].end());
+    }
+
+    return keypoints;
+}
+
+bool NumDiff::checkDoFColumnError(indexTuple indices, int dof){
+
+    MatrixXd midColumnsApprox[2];
+    for(int i = 0; i < 2; i++){
+        midColumnsApprox[i] = MatrixXd::Zero(activeModelTranslator->stateVectorSize, 1);
+    }
+
+    int midIndex = (indices.startIndex + indices.endIndex) / 2;
+    if((indices.endIndex - indices.startIndex) <=  activeDerivativeInterpolator.minN){
+        return true;
+    }
+
+    MatrixXd blank1, blank2, blank3, blank4;
+
+    bool startIndexExists = false;
+    bool midIndexExists = false;
+    bool endIndexExists = false;
+
+    for(int i = 0; i < computedKeyPoints[dofIndex].size(); i++){
+        if(computedKeyPoints[dofIndex][i] == indices.startIndex){
+            startIndexExists = true;
+        }
+
+        if(computedKeyPoints[dofIndex][i] == midIndex){
+            midIndexExists = true;
+        }
+
+        if(computedKeyPoints[dofIndex][i] == indices.endIndex){
+            endIndexExists = true;
+        }
+    }
+
+    std::vector<int> cols;
+    cols.push_back(dofIndex);
+
+    int tid = omp_get_thread_num();
+
+    if(!startIndexExists){
+        activeDifferentiator->getDerivatives(A[indices.startIndex], B[indices.startIndex], cols, blank1, blank2, blank3, blank4, false, indices.startIndex, false, tid);
+        computedKeyPoints[dofIndex].push_back(indices.startIndex);
+    }
+
+    if(!midIndexExists){
+        activeDifferentiator->getDerivatives(A[midIndex], B[midIndex], cols, blank1, blank2, blank3, blank4, false, midIndex, false, tid);
+        computedKeyPoints[dofIndex].push_back(midIndex);
+    }
+
+    if(!endIndexExists){
+        activeDifferentiator->getDerivatives(A[indices.endIndex], B[indices.endIndex], cols, blank1, blank2, blank3, blank4, false, indices.endIndex, false, tid);
+        computedKeyPoints[dofIndex].push_back(indices.endIndex);
+    }
+
+    midColumnsApprox[0] = (A[indices.startIndex].block(0, dofIndex, dof*2, 1) + A[indices.endIndex].block(0, dofIndex, dof*2, 1)) / 2;
+    midColumnsApprox[1] = (A[indices.startIndex].block(0, dofIndex + dof, dof*2, 1) + A[indices.endIndex].block(0, dofIndex + dof, dof*2, 1)) / 2;
+
+
+    bool approximationGood = false;
+    int dof = activeModelTranslator->dof;
+    double errorSum = 0.0f;
+    int counter = 0;
+
+    for(int i = 0; i < 2; i++){
+        int A_col_indices[2] = {dofIndex, dofIndex + dof};
+        for(int j = dof; j < activeModelTranslator->stateVectorSize; j++){
+            double sqDiff = pow((A[midIndex](j, A_col_indices[i]) - midColumnsApprox[i](j, 0)),2);
+
+            counter++;
+            errorSum += sqDiff;
+        }
+//        cout << "errorSum: " << errorSum << "\n";
+    }
+
+    double averageError;
+    if(counter > 0){
+        averageError = errorSum / counter;
+    }
+    else{
+        averageError = 0.0f;
+    }
+
+//    if(dofIndex == 0){
+//        cout << "average error: " << averageError << "\n";
+//    }
+
+//    cout << "average error: " << averageError << "\n";
+//    cout << "num valid: " << counter << "\n";
+//    cout << "num too small: " << counterTooSmall << "\n";
+//    cout << "num too large: " << counterTooLarge << "\n";
+
+    // 0.00005
+    if(averageError <  di.iterativeErrorThreshold){ //0.00001
+        approximationGood = true;
+    }
+
+    return approximationGood;
 }
 
 void NumDiff::interpolateDerivs(std::vector<std::vector<int>> keypoints, eigTd &Fxd, eigTd &Fud, int horizon){
