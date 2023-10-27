@@ -13,11 +13,21 @@
 int main(int argc, char const *argv[])
 {
     int testNumber = -1;
-    std::string keypoint_method = "SI2";
-    for(int i = 1; i < argc; i++){
-        testNumber = std::stoi(argv[i]);
+    std::string keypoint_method = "baseline";
+
+    // Test number parameter - used to select which test to run
+    if (argc > 1){
+        testNumber = std::stoi(argv[1]);
     }
+
+    if (argc > 2){
+        keypoint_method = argv[2];
+    }
+
+
+
     std::cout << "test number: " << testNumber << "\n";
+    std::cout << "keypoint method: " << keypoint_method << "\n";
 
     // ***** MuJoCo initialization ***********************************************/
     // Activate MuJoCo
@@ -47,6 +57,36 @@ int main(int argc, char const *argv[])
     Control cc(m, &cp);
     SCVX scvx(m, &cp, &cc);
     PenaltyLoop pl(m, &cp, &cc, &scvx);
+
+    // ****** Setup derivative inteprolator **************************************/
+    std::vector<double> jerkThresholds = {0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05};
+    std::vector<double> velChange_thresholds = {0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1};
+    derivative_interpolator interpolator = {"set_interval", 1, 5, jerkThresholds, velChange_thresholds, 0.1};
+
+    if(keypoint_method == "baseline"){
+        // Do nothing, default interpolator is already set
+    }
+    else if(keypoint_method == "SI2"){
+        interpolator.min_n = 2;
+    }
+    else if(keypoint_method == "SI20"){
+        interpolator.min_n = 20;
+    }
+    else if(keypoint_method == "adaptive_jerk"){
+        interpolator.keyPoint_method = "adaptive_jerk";
+    }
+    else if(keypoint_method == "magvel_change"){
+        interpolator.keyPoint_method = "magvel_change";
+    }
+    else if(keypoint_method == "iterative_error"){
+        interpolator.keyPoint_method = "iterative_error";
+    }
+    else{
+        std::cout << "keypoint method " << keypoint_method << " not recognized\n";
+        exit(0);
+    }
+
+    scvx.set_interpolator(interpolator);
     // ***** Trajectories ********************************************************/
     eigMd U0, U;
     U0.resize(cp.m, cp.N);
@@ -116,7 +156,6 @@ int main(int argc, char const *argv[])
         csvFile << qpTime << "\n";
 
     }
-
 
     return 0;
 }

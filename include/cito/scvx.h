@@ -30,6 +30,8 @@ public:
     // This function refreshes SCVX variables for a new run
     void refresh();
 
+    void set_interpolator(derivative_interpolator _di);
+
     double optTime, costReduction, derivsTime, qpTime;
 
 private:
@@ -52,6 +54,7 @@ private:
     bool checkDoFColumnError(derivative_interpolator di, indexTuple indices, int dofIndex, const eigMd U, double compensateBias);
 
     std::vector<std::vector<int>> computedKeyPoints;        // Stores the keypoints computed via iterative error so re-computation isn't performed
+    derivative_interpolator di;                             // Stores the derivative interpolator parameters
 
 
     /// Trajectories

@@ -56,7 +56,7 @@ def box_plot(data, fill_color, yAxisTitle, ax, labels, logyAxis = False, baselin
 
 def main():
     num_trajecs = 100
-    methods = ["baseline", "SI2"]
+    methods = ["baseline", "SI2", "SI20", "adaptive_jerk", "magvel_change", "iterative_error"]
     labels = ["optTime", "costReduction", "derivsTime", "qpTime"]
 
     data = np.zeros((num_trajecs, len(labels) * len(methods)))
@@ -71,8 +71,6 @@ def main():
             tempData = np.genfromtxt(file_name, delimiter=",")
 
             data[j, i * len(labels) : (i + 1) * len(labels)] = tempData
-
-    print(data)
 
 
     optTimes = np.zeros((num_trajecs, len(methods)))
@@ -108,6 +106,21 @@ def main():
     yAxisLabel = "qp time (s)"
     orange = "#edb83b"
     bp4 = box_plot(qpTime, orange, yAxisLabel, axes[3], methods)
+
+    meanOptTimes = np.mean(optTimes, axis=0)
+    meanCostReductions = np.mean(costReductions, axis=0)
+    meanderivsTime = np.mean(derivsTime, axis=0)
+    meanQPTimes = np.mean(qpTime, axis=0)
+
+    print("--------------------- methods ----------------------")
+    print(methods)
+    print("--------------------- mean opt times ----------------------")
+    print(meanOptTimes)
+    print("--------------------- mean cost reductions ----------------------")
+    print(meanCostReductions)
+    print("--------------------- mean derivs times ----------------------")
+    print(meanderivsTime)
+
 
 
 

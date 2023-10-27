@@ -49,6 +49,11 @@ SCVX::SCVX(const mjModel *m_, Params *cp_, Control *cc_) : m(m_), cp(cp_), cc(cc
         Fx[i].resize(cp->n, cp->n);
         Fu[i].resize(cp->n, cp->m);
     }
+
+    // set interpolator to defualt parameters
+    di.keyPoint_method = "set_interval";
+    di.min_n = 1;
+    di.max_n = 5;
 }
 // ***** DESTRUCTOR ************************************************************
 SCVX::~SCVX()
@@ -64,6 +69,11 @@ SCVX::~SCVX()
 }
 
 // ***** FUNCTIONS *************************************************************
+
+void SCVX::set_interpolator(derivative_interpolator _di){
+    di = _di;
+}
+
 // getCost: returns the nonlinear cost given control trajectory and final state
 double SCVX::getCost(const eigMd &X, const eigMd &U)
 {
@@ -90,8 +100,6 @@ trajectory SCVX::runSimulation(const eigMd &U, bool linearize, int save, double 
     mj_forward(m, d);
     cc->setControl(d, U.col(0), compensateBias);
 
-//    std::cout << "before rollout occurs \n";
-
     // Rollout the dynamics and save data to buffer
     nd.save_data_to_rollout_data(d, 0);
     for (int i = 0; i < cp->N; i++)
@@ -107,35 +115,31 @@ trajectory SCVX::runSimulation(const eigMd &U, bool linearize, int save, double 
         nd.save_data_to_rollout_data(d, i + 1);
     }
 
-//    std::cout << "rollout and save occured \n";
-
-
     std::vector<std::vector<int>> keypoints;
-    std::vector<double> jerkThresholds = {0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05};
-    std::vector<double> velChange_thresholds = {0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1};
-    derivative_interpolator interpolator = {"iterative_error", 1, 5, jerkThresholds, velChange_thresholds, 0.1};
+
     if(linearize){
 
-        if(interpolator.keyPoint_method == "iterative_error"){
+        if(di.keyPoint_method == "iterative_error"){
             computedKeyPoints.clear();
-            keypoints = generateKeypointsIterativeError(interpolator, cp->N, U, compensateBias);
+            keypoints = generateKeypointsIterativeError(di, cp->N, U, compensateBias);
         }
         else{
-            keypoints = nd.generateKeypoints(interpolator, XSucc, cp->N);
+            keypoints = nd.generateKeypoints(di, XSucc, cp->N);
         }
 
-        for(int i = 0; i < keypoints.size(); i++){
-            std::cout << i << " : ";
-            for(int j = 0; j < keypoints[i].size(); j++){
-                std::cout << keypoints[i][j] << " ";
-            }
-            std::cout << std::endl;
-        }
+        // Print the keypoints list
+//        for(int i = 0; i < keypoints.size(); i++){
+//            std::cout << i << " : ";
+//            for(int j = 0; j < keypoints[i].size(); j++){
+//                std::cout << keypoints[i][j] << " ";
+//            }
+//            std::cout << std::endl;
+//        }
     }
 
     // Compute the derivatives, but not for iterative error keypoint method as that has already computed
     // the derivatives
-    if(linearize && interpolator.keyPoint_method != "iterative_error"){
+    if(linearize && di.keyPoint_method != "iterative_error"){
         for (int i = 0; i < cp->N; i++){
             Fx[i].setZero();
             Fu[i].setZero();
@@ -147,34 +151,8 @@ trajectory SCVX::runSimulation(const eigMd &U, bool linearize, int save, double 
         }
     }
 
-    // rollout (and linearize) the dynamics
-//    for (int i = 0; i < cp->N; i++)
-//    {
-//        mj_forward(m, d);
-//        // get the current state values
-//        XSucc.col(i).setZero();
-//        XSucc.col(i) = cp->getState(d);
-//        // linearization
-//        if (linearize)
-//        {
-//            Fx[i].setZero();
-//            Fu[i].setZero();
-//            // Only linearize the dynamics when a keypoint is reached
-//            std::vector<int> cols = keypoints[i];
-//            if(cols.size() > 0){
-//                nd.linDyn(d, U.col(i), Fx[i].data(), Fu[i].data(), compensateBias, cols);
-//
-//            }
-//        }
-//        // take tc/dt steps
-//        cc->takeStep(d, U.col(i), save, compensateBias);
-//    }
-
-//    std::cout << Fx[0] << std::endl;
-//    std::cout << Fu[0] << std::endl;
-
     if(linearize){
-        if(!(interpolator.keyPoint_method == "set_interval" && interpolator.min_n == 1)){
+        if(!(di.keyPoint_method == "set_interval" && di.min_n == 1)){
             nd.interpolateDerivs(keypoints, Fx, Fu, cp->N);
         }
     }
